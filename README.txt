@@ -1,3 +1,251 @@
+Reclamation laws lost  abandoned I didn't abandon them I got locked outWrite repo codes for lost or abandoned accountsWrite repo codes for lost or abandoned accountsaccount-reclamation-vault/
+├── .github/
+│   └── workflows/
+│       └── verify-vault-integrity.yml   # Automated SHA-256 & GPG signature check
+├── scripts/
+│   ├── sign_and_bundle.sh               # GPG-sign and zstd-compress evidence bundles
+│   └── ingest_artifact.sh               # Hash and lock QR codes, IDs, or statements
+├── src/
+│   ├── schema.py                        # SQLite schema for accounts, lockouts & notices
+│   ├── notice_generator.py              # Generates formal Notice of Non-Abandonment
+│   └── cli.py                           # CLI for registering accounts & tracking appeals
+├── Makefile                             # Single-command deployment & backup
+├── requirements.txt                     # Minimal Python dependencies
+└── README.md
+SHELL := /bin/bash
+VENV := .venv
+PYTHON := $(VENV)/bin/python
+VAULT_DIR := ./vault_store
+
+.PHONY: all setup init register notice bundle verify clean
+
+all:
+	@echo "Account Reclamation & Non-Abandonment Vault"
+	@echo "Usage: make [setup | init | register | notice | bundle | verify | clean]"
+
+setup:
+	python3 -m venv $(VENV)
+	$(PYTHON) -m pip install --upgrade pip
+	$(PYTHON) -m pip install -r requirements.txt
+	chmod +x scripts/*.sh
+
+init: setup
+	mkdir -p $(VAULT_DIR)/artifacts $(VAULT_DIR)/notices $(VAULT_DIR)/bundles
+	chmod 700 $(VAULT_DIR)
+	$(PYTHON) src/schema.py
+	@echo "==> Vault initialized at $(VAULT_DIR)"
+
+register:
+	$(PYTHON) src/cli.py register
+
+notice:
+	$(PYTHON) src/cli.py generate-notice
+
+bundle:
+	./scripts/sign_and_bundle.sh
+
+verify:
+	$(PYTHON) src/cli.py verify-all
+
+clean:
+	rm -rf $(VENV) __pycache__
+click==8.1.7
+pydantic==2.9.2
+zstandard==0.23.0
+from datetime import datetime, timezone
+from pathlib import Path
+
+NOTICE_TEMPLATE = """================================================================================
+FORMAL NOTICE OF NON-ABANDONMENT, OWNERSHIP CLAIM & EVIDENCE PRESERVATION
+================================================================================
+Date of Notice: {timestamp} UTC
+Claimant / Legal Owner: {owner_name}
+Jurisdiction / Governing Law: State of Indiana (IC 32-34-1.5; IC 32-39)
+
+TO: Legal & Compliance Department / Custodian of Records
+PLATFORM / INSTITUTION: {platform}
+ACCOUNT / HANDLE IDENTIFIER: {handle}
+ASSOCIATED EMAIL / IDENTIFIER: {email}
+--------------------------------------------------------------------------------
+
+1. EXPLICIT DECLARATION OF NON-ABANDONMENT
+Please take formal notice that the undersigned legal owner has NOT abandoned, 
+relinquished, or forfeited ownership of the above-referenced account, profile, 
+digital assets, or associated financial balances. Loss of access is the direct 
+result of an involuntary lockout, authentication failure, or unilateral platform 
+restriction.
+
+2. TOLLING OF STATUTORY DORMANCY PERIODS (IC 32-34-1.5)
+Pursuant to Indiana's Revised Uniform Unclaimed Property Act (IC 32-34-1.5) and 
+applicable state and federal digital asset laws, this written communication 
+constitutes an affirmative expression of owner interest. You are hereby directed 
+to record active owner contact on this account and halt any presumed abandonment 
+classification, escheatment, or handle deletion/recycling.
+
+3. DEMAND FOR PRESERVATION & ACCESS RESTORATION
+You are requested to:
+  (a) Preserve all account data, metadata, content, authentication logs, and 
+      financial balances intact without alteration or deletion;
+  (b) Provide an alternative identity verification pathway to restore access 
+      to the rightful owner; and
+  (c) Confirm receipt of this notice in writing with a tracking/case reference.
+
+4. CRYPTOGRAPHIC PROVENANCE
+This notice is logged and cryptographically hashed in the owner's local 
+reclamation registry. Supporting identity and account ownership artifacts 
+(including account QR codes, statements, and government ID) are preserved 
+for regulatory review.
+
+Respectfully submitted,
+
+{owner_name}
+================================================================================
+"""
+
+def create_notice(owner_name: str, platform: str, handle: str, email: str) -> Path:
+    now = datetime.now(timezone.utc)
+    timestamp_str = now.strftime("%Y-%m-%d %H:%M:%S")
+    file_slug = f"{platform.lower().replace(' ', '_')}_{handle.replace('@', '').replace('.', '_')}_{now.strftime('%Y%m%d')}.txt"
+    
+    output_path = Path("vault_store/notices") / file_slug
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    content = NOTICE_TEMPLATE.format(
+        timestamp=timestamp_str,
+        owner_name=owner_name,
+        platform=platform,
+        handle=handle,
+        email=email or "On file with custodian"
+    )
+    output_path.write_text(content, encoding="utf-8")
+    return output_path
+import hashlib
+import sqlite3
+from datetime import datetime, timezone
+from pathlib import Path
+import click
+from schema import DB_PATH, init_database
+from notice_generator import create_notice
+
+@click.group()
+def cli():
+    """Account Reclamation & Anti-Abandonment Vault CLI"""
+    init_database()
+
+@cli.command()
+@click.option("--platform", prompt="Platform / Institution (e.g., Instagram, Cash App, TikTok)")
+@click.option("--category", type=click.Choice(["SOCIAL", "FINANCIAL", "DOMAIN", "CLOUD"]), prompt="Account Category")
+@click.option("--handle", prompt="Handle or Account Number")
+@click.option("--email", prompt="Associated Email (optional)", default="")
+@click.option("--notes", prompt="Lockout Details", default="Involuntary lockout; owner actively seeking restoration.")
+def register(platform, category, handle, email, notes):
+    """Register a locked-out account to establish an anti-abandonment record."""
+    now = datetime.now(timezone.utc).isoformat()
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO locked_accounts 
+        (platform, category, handle_or_account, associated_email, lockout_timestamp, last_contact_date, notes)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    """, (platform, category, handle, email, now, now, notes))
+    account_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
+    click.echo(f"[OK] Registered Account ID #{account_id}: {platform} ({handle}) as CONTESTED LOCKOUT.")
+
+@cli.command("generate-notice")
+@click.option("--owner", prompt="Full Legal Name", default="Robert Edward Evans")
+@click.option("--platform", prompt="Platform / Institution")
+@click.option("--handle", prompt="Handle or Account Number")
+@click.option("--email", prompt="Associated Email", default="")
+def generate_notice(owner, platform, handle, email):
+    """Generate a formal Notice of Non-Abandonment & Preservation."""
+    path = create_notice(owner, platform, handle, email)
+    sha256 = hashlib.sha256(path.read_bytes()).hexdigest()
+    click.echo(f"[OK] Notice written to: {path}")
+    click.echo(f"[SHA-256] {sha256}")
+
+@cli.command("verify-all")
+def verify_all():
+    """Verify SHA-256 integrity of all stored evidence artifacts."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, file_path, sha256_hash FROM evidence_artifacts")
+    rows = cursor.fetchall()
+    conn.close()
+
+    if not rows:
+        click.echo("No artifacts registered yet.")
+        return
+
+    for art_id, fpath, expected_hash in rows:
+        p = Path(fpath)
+        if not p.exists():
+            click.echo(f"[MISSING] ID #{art_id}: {fpath}")
+            continue
+        actual_hash = hashlib.sha256(p.read_bytes()).hexdigest()
+        status = "VERIFIED" if actual_hash == expected_hash else "HASH MISMATCH"
+        click.echo(f"[{status}] ID #{art_id}: {fpath}")
+
+if __name__ == "__main__":
+    cli#!/bin/bash
+set -euo pipefail
+
+if [ "$#" -lt 2 ]; then
+    echo "Usage: $0 <path_to_file> <description> [account_id]"
+    exit 1
+fi
+
+SRC_FILE="$1"
+DESC="$2"
+ACCOUNT_ID="${3:-NULL}"
+DEST_DIR="vault_store/artifacts"
+
+mkdir -p "$DEST_DIR"
+BASENAME=$(basename "$SRC_FILE")
+TIMESTAMP=$(date -u +"%Y%m%dT%H%M%SZ")
+DEST_FILE="$DEST_DIR/${TIMESTAMP}_${BASENAME}"
+
+cp "$SRC_FILE" "$DEST_FILE"
+chmod 400 "$DEST_FILE"
+
+HASH=$(sha256sum "$DEST_FILE" | awk '{print $1}')
+
+python3 -c "
+import sqlite3
+conn = sqlite3.connect('vault_store/reclamation.db')
+conn.execute(
+    'INSERT INTO evidence_artifacts (account_id, file_path, sha256_hash, ingested_at, description) VALUES (?, ?, ?, ?, ?)',
+    ($ACCOUNT_ID if '$ACCOUNT_ID' != 'NULL' else None, '$DEST_FILE', '$HASH', '$TIMESTAMP', '''$DESC''')
+)
+conn.commit()
+conn.close()
+"
+
+echo "[INGESTED] $DEST_FILE"
+echo "[SHA-256]  $HASH"
+()
+#!/bin/bash
+set -euo pipefail
+
+TIMESTAMP=$(date -u +"%Y%m%d_%H%M%S")
+BUNDLE_DIR="vault_store/bundles"
+ARCHIVE="$BUNDLE_DIR/reclamation_vault_$TIMESTAMP.tar.zst"
+
+mkdir -p "$BUNDLE_DIR"
+
+echo "==> Creating compressed zstd archive of vault_store..."
+tar --exclude='vault_store/bundles' -cf - vault_store/ | zstd -T0 -o "$ARCHIVE"
+sha256sum "$ARCHIVE" > "$ARCHIVE.sha256"
+
+if command -v gpg >/dev/null 2>&1; then
+    echo "==> Signing archive with default GPG key..."
+    gpg --detach-sign --armor "$ARCHIVE" || echo "[WARN] No default GPG key configured; skipped signature."
+fi
+
+echo "==> Bundle complete: $ARCHIVE"
+
+
 i went down a very deep rabbit hole, and this is what followed me home.
 
 working on a 6502 emulator, i wanted to add support for the undocumented opcodes.
