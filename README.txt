@@ -1,3 +1,153 @@
+How do I modify the Python conversion script to handle multiple different metric names and multiple custom labels from a single CSV?import csv
+from datetime import datetime
+
+input_csv = "data.csv"
+output_om = "history.om"
+
+# Define columns that are NOT metric labels
+RESERVED_COLUMNS = {"timestamp", "metric_name", "value"}
+
+with open(input_csv, mode="r", encoding="utf-8") as csv_file, \
+     open(output_om, mode="w", encoding="utf-8") as om_file:
+    
+    reader = csv.DictReader(csv_file)
+    
+    # Optional: Write a general description header
+    om_file.write("# HELP imported_custom_dataset Multi-metric historical dataset from CSV\n")
+    om_file.write("# TYPE imported_custom_dataset gauge\n")
+    
+    for row in reader:
+        # 1. Parse timestamp (supports epoch seconds or ISO strings)
+        ts_raw = row.get("timestamp")
+        try:
+            dt = datetime.fromtimestamp(float(ts_raw))
+        except ValueError:
+            dt = datetime.fromisoformat(ts_raw)
+            
+        timestamp_ms = int(dt.timestamp() * 1000)
+        
+        # 2. Extract metric name and numerical value
+        metric_name = row.get("metric_name", "unnamed_metric").strip()
+        try:
+            value = float(row["value"])
+        except (TypeError, ValueError):
+            continue  # Skip rows with invalid numerical values
+        
+        # 3. Dynamically collect all other columns as label key-value pairs
+        labels = []
+        for key, val in row.items():
+            if key not in RESERVED_COLUMNS and val is not None and val != "":
+                # Escape double quotes and backslashes for OpenMetrics safety
+                clean_val = str(val).replace('\\', '\\\\').replace('"', '\\"')
+                labels.append(f'{key}="{clean_val}"')
+                
+        # Format label string if labels exist
+        label_str = f"{{{','.join(labels)}}}" if labels else ""
+        
+        # 4. Write the formatted OpenMetrics line
+        line = f"{metric_name}{label_str} {value} {timestamp_ms}\n"
+        om_file.write(line)
+
+print(f"Successfully converted multi-metric CSV to {output_om}")
+history.om
+1577836800000docker compose stop prometheus
+docker compose up -d prometheus
+docker run --rm -v $(pwd):/data prom/prometheus:latest \
+  promtool tsdb create-blocks-from openmetrics /data/history.om /data/output_blocks
+import csv
+from datetime import datetime
+
+input_csv = "data.csv"
+output_om = "history.om"
+
+with open(input_csv, mode="r", encoding="utf-8") as csv_file, \
+     open(output_om, mode="w", encoding="utf-8") as om_file:
+    
+    reader = csv.DictReader(csv_file)
+    
+    # Write metadata headers (adjust metric name as needed)
+    om_file.write("# HELP historical_metric Imported historical dataset\n")
+    om_file.write("# TYPE historical_metric gauge\n")
+    
+    for row in reader:
+        # Parse timestamp (supports ISO strings or epoch floats)
+        ts_raw = row["timestamp"]
+        try:
+            # Try parsing as float epoch seconds first
+            dt = datetime.fromtimestamp(float(ts_raw))
+        except ValueError:
+            # Fallback to ISO format string
+            dt = datetime.fromisoformat(ts_raw)
+            
+        # Convert to milliseconds integer
+        timestamp_ms = int(dt.timestamp() * 1000)
+        
+        metric_name = row.get("metric_name", "historical_metric")
+        value = float(row["value"])
+        
+        # Optional: Extract custom labels if present in CSV
+        host = row.get("host", "default-host")
+        
+        # Format OpenMetrics line
+        line = f'{metric_name}{{host="{host}"}} {value} {timestamp_ms}\n'
+        om_file.write(line)
+
+print(f"Successfully converted {input_csv} to {output_om}")
+How do I modify the Python conversion script to handle multiple different metric names and multiple custom labels from a single CSV?
+import csv
+from datetime import datetime
+
+input_csv = "data.csv"
+output_om = "history.om"
+
+# Define columns that are NOT metric labels
+RESERVED_COLUMNS = {"timestamp", "metric_name", "value"}
+
+with open(input_csv, mode="r", encoding="utf-8") as csv_file, \
+     open(output_om, mode="w", encoding="utf-8") as om_file:
+    
+    reader = csv.DictReader(csv_file)
+    
+    # Optional: Write a general description header
+    om_file.write("# HELP imported_custom_dataset Multi-metric historical dataset from CSV\n")
+    om_file.write("# TYPE imported_custom_dataset gauge\n")
+    
+    for row in reader:
+        # 1. Parse timestamp (supports epoch seconds or ISO strings)
+        ts_raw = row.get("timestamp")
+        try:
+            dt = datetime.fromtimestamp(float(ts_raw))
+        except ValueError:
+            dt = datetime.fromisoformat(ts_raw)
+            
+        timestamp_ms = int(dt.timestamp() * 1000)
+        
+        # 2. Extract metric name and numerical value
+        metric_name = row.get("metric_name", "unnamed_metric").strip()
+        try:
+            value = float(row["value"])
+        except (TypeError, ValueError):
+            continue  # Skip rows with invalid numerical values
+        
+        # 3. Dynamically collect all other columns as label key-value pairs
+        labels = []
+        for key, val in row.items():
+            if key not in RESERVED_COLUMNS and val is not None and val != "":
+                # Escape double quotes and backslashes for OpenMetrics safety
+                clean_val = str(val).replace('\\', '\\\\').replace('"', '\\"')
+                labels.append(f'{key}="{clean_val}"')
+                
+        # Format label string if labels exist
+        label_str = f"{{{','.join(labels)}}}" if labels else ""
+        
+        # 4. Write the formatted OpenMetrics line
+        line = f"{metric_name}{label_str} {value} {timestamp_ms}\n"
+        om_file.write(line)
+
+print(f"Successfully converted multi-metric CSV to {output_om}")
+docker run --rm -v $(pwd):/data prom/prometheus:latest \
+  promtool tsdb create-blocks-from openmetrics /data/history.om /data/output_blocks
+
 Reclamation laws lost  abandoned I didn't abandon them I got locked outWrite repo codes for lost or abandoned accountsWrite repo codes for lost or abandoned accountsaccount-reclamation-vault/
 ├── .github/
 │   └── workflows/
